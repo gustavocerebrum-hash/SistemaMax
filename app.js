@@ -1,107 +1,6 @@
 // ==========================================
-// SUPABASE INITIALIZATION
+// 1. RELÓGIO E UTILIDADES (MOVIDO PARA O TOPO)
 // ==========================================
-const supabaseUrl = 'https://cgueweucovryodflmoxd.supabase.co';
-const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNndWV3ZXVjb3ZyeW9kZmxtb3hkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3Mzk2OTksImV4cCI6MjA5MjMxNTY5OX0.6rroezBoFeJTKlIrzhJb4MhedN4-sDMvGjcERhjfypI';
-const supabase = window.supabase.createClient(supabaseUrl, supabaseKey);
-
-// ==========================================
-// SUPABASE SYNC LOGIC
-// ==========================================
-async function fetchAllSupabase() {
-    console.log('Buscando dados da nuvem...');
-    const tables = ['pedidos', 'corte', 'costura', 'costurado', 'acabamento', 'reserva', 'reserva_saidas'];
-    const setters = [
-        v => dbPedidos = v, v => dbCorte = v, v => dbCostura = v, v => dbCosturado = v, 
-        v => dbAcabamento = v, v => dbReserva = v, v => dbReservaSaidas = v
-    ];
-
-    for(let i=0; i<tables.length; i++) {
-        const { data, error } = await supabase.from(tables[i]).select('*');
-        if(data && !error && data.length > 0) setters[i](data);
-    }
-    
-    const { data: oc } = await supabase.from('os_counters').select('*');
-    if(oc && oc.length > 0) {
-        dbOsCounters = {};
-        oc.forEach(o => dbOsCounters[o.resp] = o.counter);
-    }
-    
-    renderAll();
-    console.log('Dados da nuvem carregados!');
-}
-
-function syncToSupabase(key, data) {
-    localStorage.setItem(key, JSON.stringify(data)); // Mantém backup local
-    const tableMap = {
-        'dbPedidos': 'pedidos',
-        'dbCorte': 'corte',
-        'dbCostura': 'costura',
-        'dbCosturado': 'costurado',
-        'dbAcabamento': 'acabamento',
-        'dbReserva': 'reserva',
-        'dbReservaSaidas': 'reserva_saidas'
-    };
-    const remota = tableMap[key];
-    if(remota && data && data.length > 0) {
-        supabase.from(remota).upsert(data).then(({error}) => {
-            if(error) console.error("Erro no upsert da tabela", remota, error);
-        });
-    }
-    if (key === 'dbOsCounters') {
-        const arr = Object.keys(data).map(resp => ({ resp, counter: data[resp] }));
-        if(arr.length > 0) supabase.from('os_counters').upsert(arr).then();
-    }
-}
-
-function syncDeleteCascade(corte, cor, tam, startIdx) {
-    const tabelas = ['pedidos', 'corte', 'costura', 'costurado', 'acabamento', 'reserva'];
-    for (let i = startIdx; i < tabelas.length; i++) {
-        supabase.from(tabelas[i]).delete().eq('corte', corte).eq('cor', cor).eq('tamanho', tam).then();
-    }
-    if (startIdx <= 5) {
-        supabase.from('reserva_saidas').delete().eq('corte', corte).eq('cor', cor).eq('tamanho', tam).then();
-    }
-}
-
-window.addEventListener('DOMContentLoaded', () => {
-    fetchAllSupabase();
-});
-
-
-// ==========================================
-// BANCOS DE DADOS LOCAIS - SISTEMA MAX V8
-// ==========================================
-if (!localStorage.getItem('v_max_v7_start')) {
-    localStorage.clear();
-    localStorage.setItem('v_max_v7_start', 'true');
-}
-
-// Contador de OS por responsável: { "Giselli": 2, "Bruno": 1 }
-let dbOsCounters = JSON.parse(localStorage.getItem('dbOsCounters')) || {};
-
-function gerarOsParaResp(resp) {
-    const inicial = resp.trim().charAt(0).toUpperCase();
-    if (!dbOsCounters[resp]) dbOsCounters[resp] = 0;
-    dbOsCounters[resp]++;
-    syncToSupabase('dbOsCounters', dbOsCounters);
-    const num = String(dbOsCounters[resp]).padStart(2, '0');
-    return `${inicial}-${num}`;
-}
-
-let dbPedidos      = JSON.parse(localStorage.getItem('dbPedidos'))      || [];
-let dbCorte        = JSON.parse(localStorage.getItem('dbCorte'))        || [];
-let dbCostura      = JSON.parse(localStorage.getItem('dbCostura'))      || [];
-let dbCosturado    = JSON.parse(localStorage.getItem('dbCosturado'))    || [];
-let dbAcabamento   = JSON.parse(localStorage.getItem('dbAcabamento'))   || [];
-let dbReserva      = JSON.parse(localStorage.getItem('dbReserva'))      || [];
-let dbReservaSaidas= JSON.parse(localStorage.getItem('dbReservaSaidas'))|| [];
-
-// ==========================================
-// RELÓGIO E UTILIDADES
-// ==========================================
-
-// FIX: usa Intl para obter a data correta no fuso de Brasília (evita bug UTC)
 function getBrasiliaTime() {
     const now = new Date();
     const iso  = new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Sao_Paulo' }).format(now);
@@ -111,12 +10,108 @@ function getBrasiliaTime() {
 }
 
 function updateClock() {
-    const t = getBrasiliaTime();
-    document.getElementById('bsb-time').textContent = t.hhmm;
-    document.getElementById('bsb-date').textContent = t.br;
+    try {
+        const t = getBrasiliaTime();
+        const timeEl = document.getElementById('bsb-time');
+        const dateEl = document.getElementById('bsb-date');
+        if (timeEl) timeEl.textContent = t.hhmm;
+        if (dateEl && (dateEl.textContent === 'Buscando...' || dateEl.textContent === 'Sincronizando...')) dateEl.textContent = t.br;
+        else if (dateEl && !dateEl.textContent.includes('/')) dateEl.textContent = t.br;
+    } catch (e) {}
 }
 setInterval(updateClock, 1000);
 updateClock();
+
+// ==========================================
+// 2. BANCOS DE DADOS LOCAIS (DECLARAÇÕES)
+// ==========================================
+if (!localStorage.getItem('v_max_v7_start')) {
+    localStorage.clear();
+    localStorage.setItem('v_max_v7_start', 'true');
+}
+
+let dbOsCounters = JSON.parse(localStorage.getItem('dbOsCounters')) || {};
+let dbPedidos      = JSON.parse(localStorage.getItem('dbPedidos'))      || [];
+let dbCorte        = JSON.parse(localStorage.getItem('dbCorte'))        || [];
+let dbCostura      = JSON.parse(localStorage.getItem('dbCostura'))      || [];
+let dbCosturado    = JSON.parse(localStorage.getItem('dbCosturado'))    || [];
+let dbAcabamento   = JSON.parse(localStorage.getItem('dbAcabamento'))   || [];
+let dbReserva      = JSON.parse(localStorage.getItem('dbReserva'))      || [];
+let dbReservaSaidas= JSON.parse(localStorage.getItem('dbReservaSaidas'))|| [];
+
+// ==========================================
+// 3. SUPABASE INITIALIZATION
+// ==========================================
+const supabaseUrl = 'https://cgueweucovryodflmoxd.supabase.co';
+const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNndWV3ZXVjb3ZyeW9kZmxtb3hkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3Mzk2OTksImV4cCI6MjA5MjMxNTY5OX0.6rroezBoFeJTKlIrzhJb4MhedN4-sDMvGjcERhjfypI';
+
+let supabase;
+try {
+    if (window.supabase) {
+        supabase = window.supabase.createClient(supabaseUrl, supabaseKey);
+    }
+} catch (e) { console.error("Supabase fail:", e); }
+
+// ==========================================
+// 4. SUPABASE SYNC LOGIC
+// ==========================================
+async function fetchAllSupabase() {
+    if (!supabase) { renderAll(); return; }
+    const dateEl = document.getElementById('bsb-date');
+    if (dateEl) dateEl.textContent = 'Sincronizando...';
+
+    const tables = ['pedidos', 'corte', 'costura', 'costurado', 'acabamento', 'reserva', 'reserva_saidas'];
+    const setters = [
+        v => dbPedidos = v, v => dbCorte = v, v => dbCostura = v, v => dbCosturado = v, 
+        v => dbAcabamento = v, v => dbReserva = v, v => dbReservaSaidas = v
+    ];
+
+    try {
+        for(let i=0; i<tables.length; i++) {
+            const { data, error } = await supabase.from(tables[i]).select('*');
+            if(!error && data && data.length > 0) setters[i](data);
+        }
+        const { data: oc } = await supabase.from('os_counters').select('*');
+        if(oc && oc.length > 0) {
+            dbOsCounters = {};
+            oc.forEach(o => dbOsCounters[o.resp] = o.counter);
+        }
+    } catch (e) { console.error("Sync error:", e); }
+    renderAll();
+    updateClock();
+}
+
+function syncToSupabase(key, data) {
+    localStorage.setItem(key, JSON.stringify(data));
+    if (!supabase) return;
+    const tableMap = { 'dbPedidos': 'pedidos', 'dbCorte': 'corte', 'dbCostura': 'costura', 'dbCosturado': 'costurado', 'dbAcabamento': 'acabamento', 'dbReserva': 'reserva', 'dbReservaSaidas': 'reserva_saidas' };
+    const remota = tableMap[key];
+    if(remota && data && data.length > 0) supabase.from(remota).upsert(data).then();
+    if (key === 'dbOsCounters') {
+        const arr = Object.keys(data).map(resp => ({ resp, counter: data[resp] }));
+        if(arr.length > 0) supabase.from('os_counters').upsert(arr).then();
+    }
+}
+
+function syncDeleteCascade(corte, cor, tam, startIdx) {
+    if (!supabase) return;
+    const tabelas = ['pedidos', 'corte', 'costura', 'costurado', 'acabamento', 'reserva'];
+    for (let i = startIdx; i < tabelas.length; i++) supabase.from(tabelas[i]).delete().eq('corte', corte).eq('cor', cor).eq('tamanho', tam).then();
+    if (startIdx <= 5) supabase.from('reserva_saidas').delete().eq('corte', corte).eq('cor', cor).eq('tamanho', tam).then();
+}
+
+// Iniciar busca
+if (document.readyState === 'loading') window.addEventListener('DOMContentLoaded', fetchAllSupabase);
+else fetchAllSupabase();
+
+function gerarOsParaResp(resp) {
+    const inicial = resp.trim().charAt(0).toUpperCase();
+    if (!dbOsCounters[resp]) dbOsCounters[resp] = 0;
+    dbOsCounters[resp]++;
+    syncToSupabase('dbOsCounters', dbOsCounters);
+    const num = String(dbOsCounters[resp]).padStart(2, '0');
+    return `${inicial}-${num}`;
+}
 
 function initFormDates() {
     const t = getBrasiliaTime();
@@ -191,8 +186,7 @@ window.deletarCascade = (corte, cor, tam, nivel) => {
     syncDeleteCascade(corte, cor, tam, startIdx);
     
     ['dbPedidos','dbCorte','dbCostura','dbCosturado','dbAcabamento','dbReserva','dbReservaSaidas'].forEach(k =>
-
-        localStorage.setItem(k, JSON.stringify(eval(k)))
+        syncToSupabase(k, eval(k))
     );
     renderAll();
 };
