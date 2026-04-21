@@ -1,12 +1,18 @@
 // ==========================================
-// 1. RELÓGIO E UTILIDADES (MOVIDO PARA O TOPO)
+// 1. RELÓGIO E UTILIDADES (RESILIENTE)
 // ==========================================
 function getBrasiliaTime() {
-    const now = new Date();
-    const iso  = new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Sao_Paulo' }).format(now);
-    const br   = now.toLocaleDateString('pt-BR',  { timeZone: 'America/Sao_Paulo' });
-    const hhmm = now.toLocaleTimeString('pt-BR',  { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', hour12: false });
-    return { iso, br, hhmm };
+    try {
+        const now = new Date();
+        const iso  = new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Sao_Paulo' }).format(now);
+        const br   = now.toLocaleDateString('pt-BR',  { timeZone: 'America/Sao_Paulo' });
+        const hhmm = now.toLocaleTimeString('pt-BR',  { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', hour12: false });
+        return { iso, br, hhmm };
+    } catch (e) {
+        console.error("Erro no fuso horário:", e);
+        const now = new Date();
+        return { iso: now.toISOString().split('T')[0], br: now.toLocaleDateString(), hhmm: now.getHours()+":"+now.getMinutes() };
+    }
 }
 
 function updateClock() {
@@ -17,7 +23,7 @@ function updateClock() {
         if (timeEl) timeEl.textContent = t.hhmm;
         if (dateEl && (dateEl.textContent === 'Buscando...' || dateEl.textContent === 'Sincronizando...')) dateEl.textContent = t.br;
         else if (dateEl && !dateEl.textContent.includes('/')) dateEl.textContent = t.br;
-    } catch (e) {}
+    } catch (e) { console.warn("Clock err:", e); }
 }
 setInterval(updateClock, 1000);
 updateClock();
@@ -25,11 +31,6 @@ updateClock();
 // ==========================================
 // 2. BANCOS DE DADOS LOCAIS (DECLARAÇÕES)
 // ==========================================
-if (!localStorage.getItem('v_max_v7_start')) {
-    localStorage.clear();
-    localStorage.setItem('v_max_v7_start', 'true');
-}
-
 let dbOsCounters = JSON.parse(localStorage.getItem('dbOsCounters')) || {};
 let dbPedidos      = JSON.parse(localStorage.getItem('dbPedidos'))      || [];
 let dbCorte        = JSON.parse(localStorage.getItem('dbCorte'))        || [];
@@ -45,18 +46,29 @@ let dbReservaSaidas= JSON.parse(localStorage.getItem('dbReservaSaidas'))|| [];
 const supabaseUrl = 'https://cgueweucovryodflmoxd.supabase.co';
 const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNndWV3ZXVjb3ZyeW9kZmxtb3hkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3Mzk2OTksImV4cCI6MjA5MjMxNTY5OX0.6rroezBoFeJTKlIrzhJb4MhedN4-sDMvGjcERhjfypI';
 
-let supabase;
-try {
-    if (window.supabase) {
-        supabase = window.supabase.createClient(supabaseUrl, supabaseKey);
-    }
-} catch (e) { console.error("Supabase fail:", e); }
+let supabaseClient;
+function initSupabase() {
+    try {
+        const lib = window.supabase || (typeof supabase !== 'undefined' ? supabase : null);
+        if (lib && lib.createClient) {
+            supabaseClient = lib.createClient(supabaseUrl, supabaseKey);
+            console.log("Supabase: Cliente criado com sucesso.");
+            return true;
+        }
+    } catch (e) { console.error("Supabase init err:", e); }
+    return false;
+}
 
 // ==========================================
 // 4. SUPABASE SYNC LOGIC
 // ==========================================
 async function fetchAllSupabase() {
-    if (!supabase) { renderAll(); return; }
+    if (!initSupabase()) { 
+        console.warn("Supabase não carregado. Operando apenas com LocalStorage.");
+        renderAll(); 
+        return; 
+    }
+    
     const dateEl = document.getElementById('bsb-date');
     if (dateEl) dateEl.textContent = 'Sincronizando...';
 
@@ -68,36 +80,39 @@ async function fetchAllSupabase() {
 
     try {
         for(let i=0; i<tables.length; i++) {
-            const { data, error } = await supabase.from(tables[i]).select('*');
+            const { data, error } = await supabaseClient.from(tables[i]).select('*');
             if(!error && data && data.length > 0) setters[i](data);
+            else if(error) console.warn(`Tabela ${tables[i]} indisponível ou vazia:`, error.message);
         }
-        const { data: oc } = await supabase.from('os_counters').select('*');
+        const { data: oc } = await supabaseClient.from('os_counters').select('*');
         if(oc && oc.length > 0) {
             dbOsCounters = {};
             oc.forEach(o => dbOsCounters[o.resp] = o.counter);
         }
-    } catch (e) { console.error("Sync error:", e); }
+        console.log("Supabase: Sincronização concluída.");
+    } catch (e) { console.error("Supabase sync err:", e); }
+    
     renderAll();
     updateClock();
 }
 
 function syncToSupabase(key, data) {
     localStorage.setItem(key, JSON.stringify(data));
-    if (!supabase) return;
+    if (!supabaseClient) return;
     const tableMap = { 'dbPedidos': 'pedidos', 'dbCorte': 'corte', 'dbCostura': 'costura', 'dbCosturado': 'costurado', 'dbAcabamento': 'acabamento', 'dbReserva': 'reserva', 'dbReservaSaidas': 'reserva_saidas' };
     const remota = tableMap[key];
-    if(remota && data && data.length > 0) supabase.from(remota).upsert(data).then();
+    if(remota && data && data.length > 0) supabaseClient.from(remota).upsert(data).then();
     if (key === 'dbOsCounters') {
         const arr = Object.keys(data).map(resp => ({ resp, counter: data[resp] }));
-        if(arr.length > 0) supabase.from('os_counters').upsert(arr).then();
+        if(arr.length > 0) supabaseClient.from('os_counters').upsert(arr).then();
     }
 }
 
 function syncDeleteCascade(corte, cor, tam, startIdx) {
-    if (!supabase) return;
+    if (!supabaseClient) return;
     const tabelas = ['pedidos', 'corte', 'costura', 'costurado', 'acabamento', 'reserva'];
-    for (let i = startIdx; i < tabelas.length; i++) supabase.from(tabelas[i]).delete().eq('corte', corte).eq('cor', cor).eq('tamanho', tam).then();
-    if (startIdx <= 5) supabase.from('reserva_saidas').delete().eq('corte', corte).eq('cor', cor).eq('tamanho', tam).then();
+    for (let i = startIdx; i < tabelas.length; i++) supabaseClient.from(tabelas[i]).delete().eq('corte', corte).eq('cor', cor).eq('tamanho', tam).then();
+    if (startIdx <= 5) supabaseClient.from('reserva_saidas').delete().eq('corte', corte).eq('cor', cor).eq('tamanho', tam).then();
 }
 
 // Iniciar busca
