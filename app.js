@@ -6,6 +6,70 @@ const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS
 const supabase = window.supabase.createClient(supabaseUrl, supabaseKey);
 
 // ==========================================
+// SUPABASE SYNC LOGIC
+// ==========================================
+async function fetchAllSupabase() {
+    console.log('Buscando dados da nuvem...');
+    const tables = ['pedidos', 'corte', 'costura', 'costurado', 'acabamento', 'reserva', 'reserva_saidas'];
+    const setters = [
+        v => dbPedidos = v, v => dbCorte = v, v => dbCostura = v, v => dbCosturado = v, 
+        v => dbAcabamento = v, v => dbReserva = v, v => dbReservaSaidas = v
+    ];
+
+    for(let i=0; i<tables.length; i++) {
+        const { data, error } = await supabase.from(tables[i]).select('*');
+        if(data && !error && data.length > 0) setters[i](data);
+    }
+    
+    const { data: oc } = await supabase.from('os_counters').select('*');
+    if(oc && oc.length > 0) {
+        dbOsCounters = {};
+        oc.forEach(o => dbOsCounters[o.resp] = o.counter);
+    }
+    
+    renderAll();
+    console.log('Dados da nuvem carregados!');
+}
+
+function syncToSupabase(key, data) {
+    localStorage.setItem(key, JSON.stringify(data)); // Mantém backup local
+    const tableMap = {
+        'dbPedidos': 'pedidos',
+        'dbCorte': 'corte',
+        'dbCostura': 'costura',
+        'dbCosturado': 'costurado',
+        'dbAcabamento': 'acabamento',
+        'dbReserva': 'reserva',
+        'dbReservaSaidas': 'reserva_saidas'
+    };
+    const remota = tableMap[key];
+    if(remota && data && data.length > 0) {
+        supabase.from(remota).upsert(data).then(({error}) => {
+            if(error) console.error("Erro no upsert da tabela", remota, error);
+        });
+    }
+    if (key === 'dbOsCounters') {
+        const arr = Object.keys(data).map(resp => ({ resp, counter: data[resp] }));
+        if(arr.length > 0) supabase.from('os_counters').upsert(arr).then();
+    }
+}
+
+function syncDeleteCascade(corte, cor, tam, startIdx) {
+    const tabelas = ['pedidos', 'corte', 'costura', 'costurado', 'acabamento', 'reserva'];
+    for (let i = startIdx; i < tabelas.length; i++) {
+        supabase.from(tabelas[i]).delete().eq('corte', corte).eq('cor', cor).eq('tamanho', tam).then();
+    }
+    if (startIdx <= 5) {
+        supabase.from('reserva_saidas').delete().eq('corte', corte).eq('cor', cor).eq('tamanho', tam).then();
+    }
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+    fetchAllSupabase();
+});
+
+
+// ==========================================
 // BANCOS DE DADOS LOCAIS - SISTEMA MAX V8
 // ==========================================
 if (!localStorage.getItem('v_max_v7_start')) {
@@ -20,7 +84,7 @@ function gerarOsParaResp(resp) {
     const inicial = resp.trim().charAt(0).toUpperCase();
     if (!dbOsCounters[resp]) dbOsCounters[resp] = 0;
     dbOsCounters[resp]++;
-    localStorage.setItem('dbOsCounters', JSON.stringify(dbOsCounters));
+    syncToSupabase('dbOsCounters', dbOsCounters);
     const num = String(dbOsCounters[resp]).padStart(2, '0');
     return `${inicial}-${num}`;
 }
@@ -122,7 +186,12 @@ window.deletarCascade = (corte, cor, tam, nivel) => {
         dbReservaSaidas = dbReservaSaidas.filter(filtro);
     }
     
+    
+    // Sincroniza exclusão no Supabase
+    syncDeleteCascade(corte, cor, tam, startIdx);
+    
     ['dbPedidos','dbCorte','dbCostura','dbCosturado','dbAcabamento','dbReserva','dbReservaSaidas'].forEach(k =>
+
         localStorage.setItem(k, JSON.stringify(eval(k)))
     );
     renderAll();
@@ -149,7 +218,7 @@ document.getElementById('form-pedido').addEventListener('submit', e => {
         }
     }
     if (criados > 0) {
-        localStorage.setItem('dbPedidos', JSON.stringify(dbPedidos));
+        syncToSupabase('dbPedidos', dbPedidos);
         document.getElementById('container-cores-pedido').innerHTML = `
             <div class="linha-cor-qtd">
                 <input type="text" name="ped-cor[]" placeholder="Cor" required style="flex:2;">
@@ -188,7 +257,7 @@ document.getElementById('form-injetar-estc')?.addEventListener('submit', e => {
         }
     }
     if (criados > 0) {
-        localStorage.setItem('dbCosturado', JSON.stringify(dbCosturado));
+        syncToSupabase('dbCosturado', dbCosturado);
         document.getElementById('container-linhas-estc').innerHTML = `
             <div class="linha-cor-qtd">
                 <input type="text" name="inj-estc-cor[]" placeholder="Cor" required style="flex:2;">
@@ -231,7 +300,7 @@ document.getElementById('form-injetar-acab')?.addEventListener('submit', e => {
         }
     }
     if (criados > 0) {
-        localStorage.setItem('dbAcabamento', JSON.stringify(dbAcabamento));
+        syncToSupabase('dbAcabamento', dbAcabamento);
         document.getElementById('container-linhas-acab').innerHTML = `
             <div class="linha-cor-qtd">
                 <input type="text" name="inj-acab-cor[]" placeholder="Cor" required style="flex:2;">
@@ -269,7 +338,7 @@ document.getElementById('form-injetar-reserva')?.addEventListener('submit', e =>
         }
     }
     if (criados > 0) {
-        localStorage.setItem('dbReserva', JSON.stringify(dbReserva));
+        syncToSupabase('dbReserva', dbReserva);
         document.getElementById('container-linhas-res').innerHTML = `
             <div class="linha-cor-qtd">
                 <input type="text" name="inj-res-cor[]" placeholder="Cor" required style="flex:2;">
@@ -425,9 +494,9 @@ document.getElementById('form-corte').addEventListener('submit', e => {
     const fl  = document.getElementById('cor-folha').value.trim() || '0';
     p.qtd_solicitada -= qtd;
     if (p.qtd_solicitada <= 0) p.cortado = true;
-    localStorage.setItem('dbPedidos', JSON.stringify(dbPedidos));
+    syncToSupabase('dbPedidos', dbPedidos);
     dbCorte.push({ id: Date.now().toString(), pedidoId: pId, corte: p.corte, ref: p.ref, cor: p.cor, tamanho: p.tamanho, dataTrabalhado: dt, qtdReal: qtd, tecido: p.tecido || 'N/A', folhas: fl });
-    localStorage.setItem('dbCorte', JSON.stringify(dbCorte));
+    syncToSupabase('dbCorte', dbCorte);
     e.target.reset();
     document.getElementById('cor-busca-manual').value   = '';
     document.getElementById('cor-sugestoes').innerHTML  = '';
@@ -450,7 +519,7 @@ document.getElementById('form-oficina-envio').addEventListener('submit', e => {
         nome: nome,
         status: 'Enviado', devolvida: 0, descarte: 0, faltaReal: 0, dataRetorno: '', irAca: 0, irEstc: 0,
         tecido: c.tecido, folhas: c.folhas });
-    localStorage.setItem('dbCostura', JSON.stringify(dbCostura));
+    syncToSupabase('dbCostura', dbCostura);
     e.target.reset(); renderAll();
 });
 
@@ -508,13 +577,13 @@ document.getElementById('form-devolucao-modal').addEventListener('submit', e => 
             status:'Enviado', devolvida:0, descarte:0, faltaReal:0, dataRetorno:'', irAca:0, irEstc:0,
             tecido: dbCostura[idx].tecido, folhas: dbCostura[idx].folhas });
     }
-    localStorage.setItem('dbCostura', JSON.stringify(dbCostura));
+    syncToSupabase('dbCostura', dbCostura);
     if (irEstc > 0) {
         dbCosturado.push({ id: Date.now().toString(), costuraId: id, corte: dbCostura[idx].corte,
             ref: dbCostura[idx].ref, cor: dbCostura[idx].cor, tamanho: dbCostura[idx].tamanho,
             dataChegada: dbCostura[idx].dataRetorno, saldoAtual: irEstc, recOriginal: irEstc,
             tecido: dbCostura[idx].tecido, folhas: dbCostura[idx].folhas });
-        localStorage.setItem('dbCosturado', JSON.stringify(dbCosturado));
+        syncToSupabase('dbCosturado', dbCosturado);
     }
     if (irAca > 0) {
         dbAcabamento.push({ id: Date.now().toString(), corte: dbCostura[idx].corte, ref: dbCostura[idx].ref,
@@ -522,7 +591,7 @@ document.getElementById('form-devolucao-modal').addEventListener('submit', e => 
             origem:'Direto da Oficina', dataEmissao: dbCostura[idx].dataRetorno,
             qtdRecebida: irAca, status:'Pendente', osGerada:'', resp:'', dataInicio:'', dataFim:'', qtdSP:0, qtdReserva:0,
             tecido: dbCostura[idx].tecido, folhas: dbCostura[idx].folhas });
-        localStorage.setItem('dbAcabamento', JSON.stringify(dbAcabamento));
+        syncToSupabase('dbAcabamento', dbAcabamento);
     }
     fecharModalDevolucao(); e.target.reset(); renderAll();
 });
@@ -534,13 +603,13 @@ document.getElementById('form-costurado-saida').addEventListener('submit', e => 
     const q   = parseInt(document.getElementById('estc-qtd').value);
     if (q > dbCosturado[idx].saldoAtual) return alert("Qtd superior ao saldo.");
     dbCosturado[idx].saldoAtual -= q;
-    localStorage.setItem('dbCosturado', JSON.stringify(dbCosturado));
+    syncToSupabase('dbCosturado', dbCosturado);
     dbAcabamento.push({ id: Date.now().toString(), corte: dbCosturado[idx].corte, ref: dbCosturado[idx].ref,
         cor: dbCosturado[idx].cor, tamanho: dbCosturado[idx].tamanho,
         origem:'Estoque Costurado', dataEmissao: document.getElementById('estc-data').value,
         qtdRecebida: q, status:'Pendente', osGerada:'',
         tecido: dbCosturado[idx].tecido, folhas: dbCosturado[idx].folhas });
-    localStorage.setItem('dbAcabamento', JSON.stringify(dbAcabamento));
+    syncToSupabase('dbAcabamento', dbAcabamento);
     e.target.reset(); renderAll();
 });
 
@@ -621,7 +690,7 @@ document.getElementById('form-acabamento-inicio').addEventListener('submit', e =
         }
     });
 
-    localStorage.setItem('dbAcabamento', JSON.stringify(dbAcabamento));
+    syncToSupabase('dbAcabamento', dbAcabamento);
     document.getElementById('container-lotes-acabamento').innerHTML = `
         <div class="linha-lote-aca">
             <select name="aca-lote-id[]" required onchange="atualizarMaxQtdAca(this); sincronizarSelectsAcabamento();"><option value="">Selecione o Lote Pendente</option></select>
@@ -657,13 +726,13 @@ document.getElementById('form-acabamento-final').addEventListener('submit', e =>
     const descricao = document.getElementById('aca-descricao-fim')?.value.trim() || '';
     if ((qSP + qRES) !== dbAcabamento[idx].qtdRecebida) return alert("Erro matematico: soma diferente da qtd da OS.");
     Object.assign(dbAcabamento[idx], { status:'Finalizado', dataFim: document.getElementById('aca-data-fim').value, qtdSP: qSP, qtdReserva: qRES, descricaoFinal: descricao });
-    localStorage.setItem('dbAcabamento', JSON.stringify(dbAcabamento));
+    syncToSupabase('dbAcabamento', dbAcabamento);
     if (qRES > 0) {
         dbReserva.push({ id: Date.now().toString(), acabId: id, corte: dbAcabamento[idx].corte,
             ref: dbAcabamento[idx].ref, cor: dbAcabamento[idx].cor, tamanho: dbAcabamento[idx].tamanho,
             dataChegada: dbAcabamento[idx].dataFim, saldoAtual: qRES,
             tecido: dbAcabamento[idx].tecido, folhas: dbAcabamento[idx].folhas });
-        localStorage.setItem('dbReserva', JSON.stringify(dbReserva));
+        syncToSupabase('dbReserva', dbReserva);
     }
     fecharModalAcab(); e.target.reset(); renderAll();
 });
@@ -686,14 +755,14 @@ document.getElementById('form-saida-futura').addEventListener('submit', e => {
     const idx  = dbReserva.findIndex(x => x.id === document.getElementById('srt-id-oculto').value);
     const qSair = parseInt(document.getElementById('srt-qtd').value);
     dbReserva[idx].saldoAtual -= qSair;
-    localStorage.setItem('dbReserva', JSON.stringify(dbReserva));
+    syncToSupabase('dbReserva', dbReserva);
     dbReservaSaidas.push({ id: Date.now().toString(), corte: dbReserva[idx].corte, ref: dbReserva[idx].ref,
         cor: dbReserva[idx].cor, tamanho: dbReserva[idx].tamanho,
         dataSaida: document.getElementById('srt-data').value,
         destino: document.getElementById('srt-destino').value,
         marca:   document.getElementById('srt-marca').value, qtdSaida: qSair,
         tecido: dbReserva[idx].tecido, folhas: dbReserva[idx].folhas });
-    localStorage.setItem('dbReservaSaidas', JSON.stringify(dbReservaSaidas));
+    syncToSupabase('dbReservaSaidas', dbReservaSaidas);
     fecharModalSaida(); e.target.reset(); renderAll();
 });
 
@@ -1255,3 +1324,16 @@ window.exportarExcel = async () => {
 };
 
 renderAll();
+
+window.migrarParaNuvem = async () => {
+    if(!confirm('Atenção: Isso vai enviar TODO o seu banco local atual para a nuvem. Tem certeza?')) return;
+    console.log('Iniciando migração...');
+    const keys = ['dbPedidos','dbCorte','dbCostura','dbCosturado','dbAcabamento','dbReserva','dbReservaSaidas', 'dbOsCounters'];
+    for (const key of keys) {
+        const val = JSON.parse(localStorage.getItem(key));
+        if (val && val.length > 0) syncToSupabase(key, val);
+        if (key === 'dbOsCounters' && val) syncToSupabase(key, val);
+    }
+    alert('Migração disparada no fundo! Verifique os logs no Console (F12). A página será recarregada daqui a 5 segundos para limpar o cache.');
+    setTimeout(() => window.location.reload(), 5000);
+};
